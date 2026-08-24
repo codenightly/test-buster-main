@@ -1,0 +1,122 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "test-buster"
+version = "2.0.0"
+description = "Test Buster! - an async HTTP load generator with phase timings and CI gates"
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["load-testing", "benchmark", "http", "asyncio", "performance", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Testing :: Traffic Generation",
+    "Typing :: Typed",
+]
+dependencies = [
+    # 3.11 is the floor: it added ClientConnectorDNSError, which the failure
+    # classifier uses to tell a DNS miss apart from a refused connection.
+    "aiohttp>=3.11",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+# SOCKS proxies need a third-party connector. aiohttp only speaks HTTP CONNECT.
+socks = ["aiohttp-socks>=0.9"]
+# Faster event loop on Linux and macOS. Test Buster! uses it when it is importable.
+speed = ["uvloop>=0.19; sys_platform != 'win32'"]
+# HTTP/2 needs the httpx backend and its h2 stack.
+http2 = ["httpx[http2]>=0.27"]
+# YAML scenario files. JSON scenarios need no extra.
+yaml = ["pyyaml>=6.0"]
+# Everything a full install would want, minus the dev tools.
+all = ["aiohttp-socks>=0.9", "httpx[http2]>=0.27", "pyyaml>=6.0"]
+# Tooling for freeze.py, which builds a standalone executable.
+freeze = ["pyinstaller>=6.10"]
+nuitka = ["nuitka>=2.4"]
+# Every runtime extra is included on purpose, so mypy checks the optional
+# branches too. Without aiohttp-socks installed, the SOCKS connector call falls
+# back to Any and a type error there goes unseen.
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "aiohttp-socks>=0.9",
+    "httpx[http2]>=0.27",
+    "pyyaml>=6.0",
+    "types-pyyaml>=6.0",
+]
+
+[project.scripts]
+testbuster = "testbuster.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/testbuster"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/testbuster", "tests", "README.md"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+
+[tool.coverage.run]
+source = ["testbuster"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # import sorting
+    "UP",        # pyupgrade
+    "B",         # bugbear
+    "SIM",       # simplify
+    "RUF",       # ruff rules
+    "ASYNC",     # async correctness
+    "C4",        # comprehensions
+    "PTH",       # prefer pathlib
+]
+ignore = [
+    "B008",      # typer puts Option() calls in defaults on purpose
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+# This module is a CSS and HTML template. Long style lines are expected.
+"src/testbuster/html_report.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/testbuster"]
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr"]
+
+[[tool.mypy.overrides]]
+module = ["aiohttp_socks.*", "uvloop.*"]
+ignore_missing_imports = true

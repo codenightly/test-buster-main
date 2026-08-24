@@ -1,0 +1,107 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_COLOR: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  test:
+    name: py${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          # The engine touches signal handling and socket teardown, so both
+          # other platforms get a run. Windows has no add_signal_handler, and
+          # macOS applies different socket limits.
+          - os: windows-latest
+            python: "3.14"
+          - os: macos-latest
+            python: "3.14"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install -e ".[dev]"
+
+      - name: Lint and type check
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: |
+          ruff check --output-format=github .
+          ruff format --check .
+          mypy
+
+      - run: pytest -q --cov=testbuster --cov-report=term-missing
+
+  smoke:
+    # The suite drives the CLI in-process. This proves the built package
+    # installs and that its console script and exit codes work from a shell.
+    name: Smoke test the installed package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - run: python -m pip install .
+
+      - name: Exercise the command
+        run: |
+          set -euo pipefail
+          testbuster version --plain
+          for shell in bash zsh fish powershell; do
+            testbuster completion "$shell" > /dev/null
+          done
+
+          python - <<'PY' &
+          from aiohttp import web
+          app = web.Application()
+          app.router.add_get("/ok", lambda r: web.json_response({"ok": True}))
+          web.run_app(app, host="127.0.0.1", port=8973, print=None)
+          PY
+          for _ in $(seq 40); do
+            curl -sf http://127.0.0.1:8973/ok >/dev/null && break
+            sleep 0.2
+          done
+
+          expect() {  # expect <exit-code> <command...>
+            local want=$1; shift
+            local got=0
+            "$@" >/dev/null 2>&1 || got=$?
+            test "$got" -eq "$want" || { echo "want exit $want, got $got: $*"; exit 1; }
+          }
+
+          expect 0 testbuster http://127.0.0.1:8973/ok -n 200 -c 20 --quiet
+          expect 0 testbuster http://127.0.0.1:8973/ok -n 100 --fail-over-p95 5000 --quiet
+          expect 4 testbuster http://127.0.0.1:8973/ok -n 100 --fail-over-p95 0.001 --quiet
+          expect 3 testbuster http://127.0.0.1:1/ -n 3 -t 2s --quiet
+          expect 2 testbuster http://127.0.0.1:8973/ok -X PSOT --quiet
+
+          testbuster http://127.0.0.1:8973/ok -n 50 --quiet --json > report.json
+          python -c "
+          import json; d = json.load(open('report.json'))
+          assert d['schema'] == 'testbuster/report/1', d['schema']
+          assert d['summary']['total_requests'] == 50, d['summary']
+          assert 'p95' in d['latency'], d['latency']
+          print('report ok')
+          "
