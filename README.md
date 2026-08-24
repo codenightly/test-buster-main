@@ -58,7 +58,7 @@ Install from a checkout to work on the tool. Python 3.11 is the floor, for
 `asyncio.TaskGroup` and `asyncio.Runner`.
 
 ```bash
-git clone https://github.com/your-account/test-buster.git
+git clone https://github.com/codenightly/test-buster.git
 cd test-buster
 python -m pip install -e ".[dev]"
 pytest -q
